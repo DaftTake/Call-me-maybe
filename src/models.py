@@ -88,3 +88,7 @@ class FunctionCallResults(BaseModel):
     """The full output file: a list of results."""
 
     results: List[FunctionCallResult] = Field(default_factory=list)
+
+    def dump(self) -> str:
+        """Dump the results to a JSON string in the exact format required."""
+        return self.model_dump_json(indent=4)

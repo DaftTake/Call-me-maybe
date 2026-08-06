@@ -16,6 +16,7 @@ from src.parser import parse
 from src.llm_wrapper import LLMWrapper
 from src.models import FunctionCallResult, FunctionCallResults
 from src.constrained_decoder import decode_function_name, decode_function_arguments
+from src.errors import CallMeMaybeError, UnknownFunctionError
 from src.ui import (
     console,
     log,
@@ -44,6 +45,56 @@ def main() -> None:
 
     try:
         model = LLMWrapper(model_name=model_name)
+        function_names = function_registry.names
+        registry_json = function_registry.model_dump_json()
+
+        results = FunctionCallResults()
+        start_time = time.perf_counter()
+
+        for i, p in enumerate(prompts, start=1):
+            prompt_start_time = time.perf_counter()
+
+            result = FunctionCallResult(prompt=p.prompt, name="", parameters={})
+
+            # Build the system context
+            context = (
+                "You are a natural language to function call system.\n"
+                "Given this function registry:\n"
+                f"{registry_json}\n"
+                "Chose the appropriate function and its parameters based on the user input.\n"
+                "{\n"
+                f'    "prompt": "{p.prompt}",\n'
+                f'    "name": "'
+            )
+
+            with Live(console=console, refresh_per_second=10) as live:
+                log("Generating function name...")
+                decode_function_name(model, context, function_names, live, result)
+                log("Done generating function name.")
+
+                # Extend context with generated name and start parameters
+                context += f'{result.name}",\n    "parameters": {{\n        '
+
+                # Find the chosen function definition
+                function_def = function_registry.get(result.name)
+                if function_def is None:
+                    raise UnknownFunctionError(
+                        f"The model selected an unknown function '{result.name}'."
+                    )
+
+                log("Generating function parameters...")
+                decode_function_arguments(model, context, function_def, live, result)
+                log("Done generating function parameters.")
+
+            results.results.append(result)
+
+            log(f"Writing function call to output file: {output_path}")
+            with open(output_path, "w") as f:
+                f.write(results.dump())
+            log("Done writing output.")
+
+        total_time = time.perf_counter() - start_time
+        show_summary(total_time, len(prompts))
     except OSError:
         console.print(f"[bold red]Error:[/] Invalid Hugging Face model identifier: '{model_name}'")
         sys.exit(1)
@@ -53,54 +104,9 @@ def main() -> None:
     except RuntimeError:
         console.print(f"[bold red]Error:[/] Unable to run model: '{model_name}'")
         sys.exit(1)
-
-    function_names = function_registry.names
-    registry_json = function_registry.model_dump_json()
-
-    results = FunctionCallResults()
-    start_time = time.perf_counter()
-
-    for i, p in enumerate(prompts, start=1):
-        prompt_start_time = time.perf_counter()
-        
-        result = FunctionCallResult(prompt=p.prompt, name="", parameters={})
-        
-        # Build the system context
-        context = (
-            "You are a natural language to function call system.\n"
-            "Given this function registry:\n"
-            f"{registry_json}\n"
-            "Chose the appropriate function and its parameters based on the user input.\n"
-            "{\n"
-            f'    "prompt": "{p.prompt}",\n'
-            f'    "name": "'
-        )
-
-        with Live(console=console, refresh_per_second=10) as live:
-            log("Generating function name...")
-            decode_function_name(model, context, function_names, live, result)
-            log("Done generating function name.")
-            
-            # Extend context with generated name and start parameters
-            context += f'{result.name}",\n    "parameters": {{\n        '
-            
-            # Find the chosen function definition
-            function_def = function_registry.get(result.name)
-            
-            log("Generating function parameters...")
-            if function_def:
-                decode_function_arguments(model, context, function_def, live, result)
-            log("Done generating function parameters.")
-
-        results.results.append(result)
-        
-        log(f"Writing function call to output file: {output_path}")
-        with open(output_path, "w") as f:
-            f.write(results.dump())
-        log("Done writing output.")
-
-    total_time = time.perf_counter() - start_time
-    show_summary(total_time, len(prompts))
+    except CallMeMaybeError as error:
+        console.print(f"[bold red]Error:[/] {error}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

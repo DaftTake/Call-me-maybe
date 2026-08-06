@@ -1,13 +1,17 @@
 # ABOUTME: LLM SDK for local model inference using Hugging Face transformers.
 # ABOUTME: Provides Small_LLM_Model class for loading and running causal language models.
 
-import time
-from typing import Tuple
+from typing import Any
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizer, PreTrainedModel, logging
 from huggingface_hub import hf_hub_download
-import os
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    PreTrainedModel,
+    PreTrainedTokenizer,
+    logging,
+)
 
 
 logging.set_verbosity_error()  # keep the console clean
@@ -87,16 +91,36 @@ class Small_LLM_Model:
         return self._tokenizer.decode(ids, skip_special_tokens=True)
 
 
-    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
-        """
-        Given a list of input token ids, return the raw logits (no softmax) for the next token.
-        """
+    def prefill_logits(self, input_ids: list[int]) -> tuple[list[float], Any]:
+        """Run a full prefix through the model and return logits plus cache."""
         input_tensor = torch.tensor([input_ids], device=self._device, dtype=torch.long)
-        with torch.no_grad():
-            out = self._model(input_ids=input_tensor)
-        # Get logits for the last token in the sequence for the batch (batch size 1)
+        with torch.inference_mode():
+            out = self._model(input_ids=input_tensor, use_cache=True)
         logits = out.logits[0, -1].tolist()
-        return [float(x) for x in logits]
+        return [float(x) for x in logits], out.past_key_values
+
+
+    def advance_logits(
+        self,
+        token_id: int,
+        past_key_values: Any,
+    ) -> tuple[list[float], Any]:
+        """Advance generation by one token using cached key/value states."""
+        input_tensor = torch.tensor([[token_id]], device=self._device, dtype=torch.long)
+        with torch.inference_mode():
+            out = self._model(
+                input_ids=input_tensor,
+                past_key_values=past_key_values,
+                use_cache=True,
+            )
+        logits = out.logits[0, -1].tolist()
+        return [float(x) for x in logits], out.past_key_values
+
+
+    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
+        """Compatibility helper that returns logits for a full prefix."""
+        logits, _ = self.prefill_logits(input_ids)
+        return logits
 
 
     def get_path_to_vocab_file(self) -> str:

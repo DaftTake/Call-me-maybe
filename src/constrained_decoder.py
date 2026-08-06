@@ -7,17 +7,25 @@ deterministic (not heuristic) while being much faster than decoding the
 entire vocabulary to strings each generation step.
 """
 
-from typing import List
+import math
+from typing import Any, List
 
 from rich.live import Live
 
 from src.models import FunctionCallResult, Function
+from src.errors import DecodingError
 from src.llm_wrapper import LLMWrapper
 from src.ui import live_update_function_call
 
 # Module-level cache for decoded token strings to avoid repeated
 # expensive `model.decode([token_id])` calls inside tight loops.
 _TOKEN_STR_CACHE: dict = {}
+
+
+def _prefill(model: LLMWrapper, context: str) -> tuple[list[float], Any]:
+    """Encode the context once and return initial logits plus cache."""
+    context_ids = model.encode(context)
+    return model.prefill_logits(context_ids)
 
 
 def _token_str(model: LLMWrapper, token_id: int) -> str:
@@ -30,6 +38,12 @@ def _token_str(model: LLMWrapper, token_id: int) -> str:
     if key not in _TOKEN_STR_CACHE:
         _TOKEN_STR_CACHE[key] = model.decode([token_id])
     return _TOKEN_STR_CACHE[key]
+
+
+def _ensure_decodable(logits: list[float], message: str) -> None:
+    """Raise a controlled error if masking removed every valid option."""
+    if not any(math.isfinite(value) for value in logits):
+        raise DecodingError(message)
 
 
 def decode_function_name(
@@ -51,7 +65,7 @@ def decode_function_name(
     # Token-id based generation: encode the fixed context once and then
     # append chosen token ids to a growing list. This avoids re-encoding
     # the entire context every generation step.
-    context_ids = model.encode(context)
+    logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
     generated_str = ""
 
@@ -71,10 +85,10 @@ def decode_function_name(
     quote_id = quote_ids[0] if quote_ids else None
 
     while True:
-        logits = model.get_logits(context_ids + generated_ids)
-
         # Mask invalid tokens using the precomputed token-id prefix map.
         allowed_next = prefix_allowed.get(tuple(generated_ids), set())
+        if not allowed_next and not found_match:
+            raise DecodingError("Unable to decode a valid function name for the provided prompt.")
         for token_id in range(len(logits)):
             if token_id in allowed_next:
                 continue
@@ -82,6 +96,8 @@ def decode_function_name(
             if found_match and quote_id is not None and token_id == quote_id:
                 continue
             logits[token_id] = float("-inf")
+
+        _ensure_decodable(logits, "Unable to decode a valid function name for the provided prompt.")
 
         next_token_id = model.next_token(logits)
         next_token_str = _token_str(model, next_token_id)
@@ -99,6 +115,8 @@ def decode_function_name(
 
         if result.name in valid_names:
             found_match = True
+
+        logits, past_key_values = model.advance_logits(next_token_id, past_key_values)
 
     # Final UI update after finishing name
     live_update_function_call(live, result)
@@ -118,12 +136,12 @@ def decode_parameter_string(
     any token until a token containing a quote is produced.
     """
     result.parameters[param_name] = ""
-    context_ids = model.encode(context)
+    logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
     generated_str = ""
 
     while True:
-        logits = model.get_logits(context_ids + generated_ids)
+        _ensure_decodable(logits, f"Unable to decode string parameter '{param_name}'.")
         next_token_id = model.next_token(logits)
         next_token_str = _token_str(model, next_token_id)
 
@@ -133,6 +151,8 @@ def decode_parameter_string(
         generated_ids.append(next_token_id)
         generated_str += next_token_str
         result.parameters[param_name] = generated_str
+
+        logits, past_key_values = model.advance_logits(next_token_id, past_key_values)
 
         if len(generated_ids) % 4 == 0:
             live_update_function_call(live, result)
@@ -170,6 +190,7 @@ def decode_parameter_float(
     live: Live,
     result: FunctionCallResult,
     param_name: str,
+    max_generated_tokens: int = 12,
 ) -> None:
     """Generate a float parameter token-by-token with constraint checking.
 
@@ -179,13 +200,12 @@ def decode_parameter_float(
     precisely instead of decoding the entire vocabulary every step.
     """
     number_str = ""
-    context_ids = model.encode(context)
+    logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
 
     # Precompute numeric-related and delimiter token ids once.
     numeric_charset = set("0123456789eE+-.")
-    sample_logits = model.get_logits(context_ids + generated_ids)
-    vocab_size = len(sample_logits)
+    vocab_size = len(logits)
     numeric_token_ids = set()
     delimiter_token_ids = set()
     for tid in range(vocab_size):
@@ -197,7 +217,8 @@ def decode_parameter_float(
             numeric_token_ids.add(tid)
 
     while True:
-        logits = model.get_logits(context_ids + generated_ids)
+        if len(generated_ids) >= max_generated_tokens:
+            break
 
         # Disallow all tokens that are neither numeric-related nor delimiters.
         for token_id in range(len(logits)):
@@ -215,6 +236,8 @@ def decode_parameter_float(
                 if not _is_valid_float_prefix(number_str):
                     logits[token_id] = float("-inf")
 
+        _ensure_decodable(logits, f"Unable to decode float parameter '{param_name}'.")
+
         next_token_id = model.next_token(logits)
         next_token_str = _token_str(model, next_token_id)
 
@@ -228,6 +251,8 @@ def decode_parameter_float(
         except ValueError:
             result.parameters[param_name] = None
 
+        logits, past_key_values = model.advance_logits(next_token_id, past_key_values)
+
         if len(generated_ids) % 4 == 0:
             live_update_function_call(live, result)
 
@@ -240,16 +265,16 @@ def decode_parameter_integer(
     live: Live,
     result: FunctionCallResult,
     param_name: str,
+    max_generated_tokens: int = 8,
 ) -> None:
     """Generate an integer parameter token-by-token with constraint checking."""
     number_str = ""
-    context_ids = model.encode(context)
+    logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
 
     # Precompute tokens that are integer-related (digits and sign) or delimiters
     int_charset = set("0123456789-")
-    sample_logits = model.get_logits(context_ids + generated_ids)
-    vocab_size = len(sample_logits)
+    vocab_size = len(logits)
     int_token_ids = set()
     delimiter_token_ids = set()
     for tid in range(vocab_size):
@@ -261,7 +286,8 @@ def decode_parameter_integer(
             int_token_ids.add(tid)
 
     while True:
-        logits = model.get_logits(context_ids + generated_ids)
+        if len(generated_ids) >= max_generated_tokens:
+            break
 
         for token_id in range(len(logits)):
             if token_id in int_token_ids or token_id in delimiter_token_ids:
@@ -279,6 +305,8 @@ def decode_parameter_integer(
                 if not number_str.lstrip("-").isdigit():
                     logits[token_id] = float("-inf")
 
+        _ensure_decodable(logits, f"Unable to decode integer parameter '{param_name}'.")
+
         next_token_id = model.next_token(logits)
         next_token_str = _token_str(model, next_token_id)
 
@@ -291,6 +319,8 @@ def decode_parameter_integer(
             result.parameters[param_name] = int(number_str)
         except ValueError:
             result.parameters[param_name] = None
+
+        logits, past_key_values = model.advance_logits(next_token_id, past_key_values)
 
         if len(generated_ids) % 4 == 0:
             live_update_function_call(live, result)
@@ -313,7 +343,7 @@ def decode_parameter_boolean(
     """
     output_str = ""
     parsed_bool = False
-    context_ids = model.encode(context)
+    logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
 
     # Build token sequences for the two valid boolean words
@@ -326,13 +356,15 @@ def decode_parameter_boolean(
             prefix_allowed.setdefault(prefix, set()).add(seq[pos])
 
     while True:
-        logits = model.get_logits(context_ids + generated_ids)
-
         allowed_next = prefix_allowed.get(tuple(generated_ids), set())
+        if not allowed_next:
+            raise DecodingError("Unable to decode a boolean parameter.")
         for token_id in range(len(logits)):
             if token_id in allowed_next:
                 continue
             logits[token_id] = float("-inf")
+
+        _ensure_decodable(logits, "Unable to decode a boolean parameter.")
 
         next_token_id = model.next_token(logits)
         next_token_str = _token_str(model, next_token_id)
@@ -347,6 +379,8 @@ def decode_parameter_boolean(
 
         generated_ids.append(next_token_id)
         output_str += next_token_str
+
+        logits, past_key_values = model.advance_logits(next_token_id, past_key_values)
 
     result.parameters[param_name] = parsed_bool
     live_update_function_call(live, result)
@@ -375,10 +409,24 @@ def decode_function_arguments(
                 decode_parameter_string(model, context, live, result, param_name)
                 context += f'{result.parameters[param_name]}",'
             case "number":
-                decode_parameter_float(model, context, live, result, param_name)
+                decode_parameter_float(
+                    model,
+                    context,
+                    live,
+                    result,
+                    param_name,
+                    max_generated_tokens=8,
+                )
                 context += f'{result.parameters[param_name]},'
             case "integer":
-                decode_parameter_integer(model, context, live, result, param_name)
+                decode_parameter_integer(
+                    model,
+                    context,
+                    live,
+                    result,
+                    param_name,
+                    max_generated_tokens=6,
+                )
                 context += f'{result.parameters[param_name]},'
             case "boolean":
                 decode_parameter_boolean(model, context, live, result, param_name)

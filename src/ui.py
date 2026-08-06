@@ -9,7 +9,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.live import Live
-from rich.status import Status
 from rich.text import Text
 import json
 
@@ -19,10 +18,12 @@ import sys
 console = Console()
 log = console.log
 
+
 def print_error(msg: str) -> None:
     """Print an error message and exit."""
     console.print(f"[bold red]Error:[/] {msg}")
     sys.exit(1)
+
 
 def print_header() -> None:
     """Print the application title banner."""
@@ -57,7 +58,8 @@ def show_registry(registry: FunctionRegistry) -> None:
     table.add_column("Parameters", style="green")
 
     for func in registry.functions:
-        params_str = ", ".join(f"{name}: {param.type}" for name, param in func.parameters.items())
+        params_str = ", ".join(f"{
+            name}: {param.type}" for name, param in func.parameters.items())
         table.add_row(func.name, func.description, params_str or "None")
 
     console.print(table)
@@ -79,15 +81,15 @@ def live_update_function_call(live: Live, result: FunctionCallResult) -> None:
         params_json = json.dumps(result.parameters, indent=2)
     except Exception:
         params_json = str(result.parameters)
-        
+
     content = Text()
-    content.append(f"Prompt: ", style="bold cyan")
+    content.append("Prompt: ", style="bold cyan")
     content.append(f"{result.prompt}\n\n", style="white")
-    
-    content.append(f"Generating Function: ", style="bold magenta")
+
+    content.append("Generating Function: ", style="bold magenta")
     content.append(f"{result.name}\n\n", style="green")
-    
-    content.append(f"Generating Parameters:\n", style="bold magenta")
+
+    content.append("Generating Parameters:\n", style="bold magenta")
     content.append(f"{params_json}", style="yellow")
 
     panel = Panel(
@@ -100,5 +102,8 @@ def live_update_function_call(live: Live, result: FunctionCallResult) -> None:
 
 def show_summary(total_time: float, num_prompts: int) -> None:
     """Display the execution summary."""
-    console.print(f"\n[bold green]Generation Complete![/bold green]")
-    console.print(f"Processed [cyan]{num_prompts}[/cyan] prompts in [yellow]{total_time:.2f}s[/yellow].")
+    console.print("\n[bold green]Generation Complete[/bold green]")
+    console.print(
+         f"Procesed [cyan]{
+            num_prompts}[/cyan] prompts in [yellow]{
+                total_time:.2f}s[/yellow].")

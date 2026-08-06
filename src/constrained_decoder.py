@@ -1,7 +1,10 @@
 """Constrained decoding engine for function calls.
 
 This module forces the language model to only output structurally valid
-function calls that adhere to the provided JSON schema.
+function calls that adhere to the provided JSON schema. It implements
+token-id level masking using the model's tokenizer so constraints are
+deterministic (not heuristic) while being much faster than decoding the
+entire vocabulary to strings each generation step.
 """
 
 from typing import List
@@ -12,6 +15,22 @@ from src.models import FunctionCallResult, Function
 from src.llm_wrapper import LLMWrapper
 from src.ui import live_update_function_call
 
+# Module-level cache for decoded token strings to avoid repeated
+# expensive `model.decode([token_id])` calls inside tight loops.
+_TOKEN_STR_CACHE: dict = {}
+
+
+def _token_str(model: LLMWrapper, token_id: int) -> str:
+    """Return the string for a single token id, caching results.
+
+    The cache key includes the model object's id so the same token id
+    used with different model instances won't collide.
+    """
+    key = (id(model), token_id)
+    if key not in _TOKEN_STR_CACHE:
+        _TOKEN_STR_CACHE[key] = model.decode([token_id])
+    return _TOKEN_STR_CACHE[key]
+
 
 def decode_function_name(
     model: LLMWrapper,
@@ -20,47 +39,69 @@ def decode_function_name(
     live: Live,
     result: FunctionCallResult,
 ) -> None:
-    """Generate a function name token-by-token with constraint checking.
+    """Generate a function name token-by-token with token-level constraint checking.
 
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context seen so far.
-        valid_names: List of acceptable function names from the registry.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
+    This builds exact token sequences for every `valid_name` using the model's
+    tokenizer and then constructs a prefix->allowed-next-token-id map. During
+    generation we only allow token ids present in that map for the current
+    prefix. This is deterministic and enforces validity exactly (not a heuristic).
     """
     found_match = False
 
+    # Token-id based generation: encode the fixed context once and then
+    # append chosen token ids to a growing list. This avoids re-encoding
+    # the entire context every generation step.
+    context_ids = model.encode(context)
+    generated_ids: List[int] = []
+    generated_str = ""
+
+    # Precompute token-id sequences for all valid names and build a mapping
+    # from token-prefix tuples to the set of allowed next token ids. This
+    # is deterministic because it uses the model's tokenizer to get the
+    # exact tokenization of each valid name.
+    name_token_seqs: List[List[int]] = [model.encode(n) for n in valid_names]
+    prefix_allowed: dict[tuple, set[int]] = {}
+    for seq in name_token_seqs:
+        for pos in range(len(seq)):
+            prefix = tuple(seq[:pos])
+            prefix_allowed.setdefault(prefix, set()).add(seq[pos])
+
+    # Token id for a double-quote (used to close names)
+    quote_ids = model.encode('"')
+    quote_id = quote_ids[0] if quote_ids else None
+
     while True:
-        logits = model.get_logits(model.encode(context + result.name))
+        logits = model.get_logits(context_ids + generated_ids)
 
-        # Mask invalid tokens
-        for token_id, _ in enumerate(logits):
-            token_str = model.decode([token_id])
-            candidate_prefix = result.name + token_str
-
-            # Check if this token could lead to a valid name
-            is_valid_prefix = any(
-                name.startswith(candidate_prefix) for name in valid_names
-            )
-            
-            if not is_valid_prefix:
-                # If we already generated a valid full name, the only valid next token is '"'
-                if token_str == '"' and found_match:
-                    continue
-                logits[token_id] = float("-inf")
+        # Mask invalid tokens using the precomputed token-id prefix map.
+        allowed_next = prefix_allowed.get(tuple(generated_ids), set())
+        for token_id in range(len(logits)):
+            if token_id in allowed_next:
+                continue
+            # Allow closing quote if we've already matched a full name
+            if found_match and quote_id is not None and token_id == quote_id:
+                continue
+            logits[token_id] = float("-inf")
 
         next_token_id = model.next_token(logits)
-        next_token_str = model.decode([next_token_id])
+        next_token_str = _token_str(model, next_token_id)
 
         if next_token_str == '"' and found_match:
             break
 
+        generated_ids.append(next_token_id)
+        generated_str += next_token_str
         result.name += next_token_str
-        live_update_function_call(live, result)
+
+        # Update UI less frequently to reduce overhead
+        if len(generated_ids) % 4 == 0:
+            live_update_function_call(live, result)
 
         if result.name in valid_names:
             found_match = True
+
+    # Final UI update after finishing name
+    live_update_function_call(live, result)
 
 
 def decode_parameter_string(
@@ -72,30 +113,31 @@ def decode_parameter_string(
 ) -> None:
     """Generate a string parameter token-by-token.
 
-    Stops when it generates a closing quote.
-
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context seen so far.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
-        param_name: The name of the parameter being generated.
+    Stops when it generates a closing quote. Uses token-id generation to avoid
+    repeated encoding of the full context. Strings are free-form, so we allow
+    any token until a token containing a quote is produced.
     """
     result.parameters[param_name] = ""
+    context_ids = model.encode(context)
+    generated_ids: List[int] = []
+    generated_str = ""
+
     while True:
-        logits = model.get_logits(
-            model.encode(context + result.parameters[param_name])
-        )
+        logits = model.get_logits(context_ids + generated_ids)
         next_token_id = model.next_token(logits)
-        next_token_str = model.decode([next_token_id])
+        next_token_str = _token_str(model, next_token_id)
 
         if '"' in next_token_str:
             break
 
-        result.parameters[param_name] += next_token_str
-        live_update_function_call(live, result)
+        generated_ids.append(next_token_id)
+        generated_str += next_token_str
+        result.parameters[param_name] = generated_str
 
-    result.parameters[param_name] = result.parameters[param_name].strip()
+        if len(generated_ids) % 4 == 0:
+            live_update_function_call(live, result)
+
+    result.parameters[param_name] = generated_str.strip()
     live_update_function_call(live, result)
 
 
@@ -131,48 +173,65 @@ def decode_parameter_float(
 ) -> None:
     """Generate a float parameter token-by-token with constraint checking.
 
-    Stops at a comma or closing brace.
-
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context seen so far.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
-        param_name: The name of the parameter being generated.
+    Stops at a comma or closing brace. We speed up masking by precomputing
+    token ids whose token strings are numeric-related (digits, sign, dot,
+    exponent) and delimiter tokens. We then only validate those tokens
+    precisely instead of decoding the entire vocabulary every step.
     """
     number_str = ""
+    context_ids = model.encode(context)
+    generated_ids: List[int] = []
+
+    # Precompute numeric-related and delimiter token ids once.
+    numeric_charset = set("0123456789eE+-.")
+    sample_logits = model.get_logits(context_ids + generated_ids)
+    vocab_size = len(sample_logits)
+    numeric_token_ids = set()
+    delimiter_token_ids = set()
+    for tid in range(vocab_size):
+        tstr = _token_str(model, tid)
+        if tstr in (",", "}"):
+            delimiter_token_ids.add(tid)
+            continue
+        if tstr and all((c in numeric_charset) for c in tstr):
+            numeric_token_ids.add(tid)
+
     while True:
-        logits = model.get_logits(model.encode(context + number_str))
+        logits = model.get_logits(context_ids + generated_ids)
 
-        for token_id, _ in enumerate(logits):
-            token_str = model.decode([token_id])
+        # Disallow all tokens that are neither numeric-related nor delimiters.
+        for token_id in range(len(logits)):
+            if token_id in numeric_token_ids or token_id in delimiter_token_ids:
+                continue
+            logits[token_id] = float("-inf")
 
-            if "," in token_str and token_str != ",":
-                logits[token_id] = float("-inf")
-            if "}" in token_str and token_str != "}":
-                logits[token_id] = float("-inf")
-            
-            # If it's a delimiter, the number collected so far must be valid
-            if (token_str == "," or token_str == "}") and not _is_valid_float_prefix(number_str):
-                logits[token_id] = float("-inf")
-                
-            # If it's not a delimiter, it must be part of a valid float
-            if (
-                token_str != ","
-                and token_str != "}"
-                and not _is_valid_float_prefix(number_str + token_str)
-            ):
-                logits[token_id] = float("-inf")
+        # Precisely validate numeric and delimiter tokens.
+        for token_id in list(numeric_token_ids | delimiter_token_ids):
+            token_str = _token_str(model, token_id)
+            if token_str not in (",", "}"):
+                if not _is_valid_float_prefix(number_str + token_str):
+                    logits[token_id] = float("-inf")
+            else:
+                if not _is_valid_float_prefix(number_str):
+                    logits[token_id] = float("-inf")
 
         next_token_id = model.next_token(logits)
-        next_token_str = model.decode([next_token_id])
+        next_token_str = _token_str(model, next_token_id)
 
         if next_token_str == "," or next_token_str == "}":
             break
 
+        generated_ids.append(next_token_id)
         number_str += next_token_str
-        result.parameters[param_name] = float(number_str)
-        live_update_function_call(live, result)
+        try:
+            result.parameters[param_name] = float(number_str)
+        except ValueError:
+            result.parameters[param_name] = None
+
+        if len(generated_ids) % 4 == 0:
+            live_update_function_call(live, result)
+
+    live_update_function_call(live, result)
 
 
 def decode_parameter_integer(
@@ -182,52 +241,61 @@ def decode_parameter_integer(
     result: FunctionCallResult,
     param_name: str,
 ) -> None:
-    """Generate an integer parameter token-by-token with constraint checking.
-
-    Stops at a comma or closing brace.
-
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context seen so far.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
-        param_name: The name of the parameter being generated.
-    """
+    """Generate an integer parameter token-by-token with constraint checking."""
     number_str = ""
+    context_ids = model.encode(context)
+    generated_ids: List[int] = []
+
+    # Precompute tokens that are integer-related (digits and sign) or delimiters
+    int_charset = set("0123456789-")
+    sample_logits = model.get_logits(context_ids + generated_ids)
+    vocab_size = len(sample_logits)
+    int_token_ids = set()
+    delimiter_token_ids = set()
+    for tid in range(vocab_size):
+        tstr = _token_str(model, tid)
+        if tstr in (",", "}"):
+            delimiter_token_ids.add(tid)
+            continue
+        if tstr and all((c in int_charset) for c in tstr):
+            int_token_ids.add(tid)
+
     while True:
-        logits = model.get_logits(model.encode(context + number_str))
+        logits = model.get_logits(context_ids + generated_ids)
 
-        for token_id, _ in enumerate(logits):
-            token_str = model.decode([token_id])
+        for token_id in range(len(logits)):
+            if token_id in int_token_ids or token_id in delimiter_token_ids:
+                continue
+            logits[token_id] = float("-inf")
 
-            if "," in token_str and token_str != ",":
-                logits[token_id] = float("-inf")
-            if "}" in token_str and token_str != "}":
-                logits[token_id] = float("-inf")
-            
-            # If it's a delimiter, the number collected so far must be a valid integer
-            if (token_str == "," or token_str == "}") and not number_str.lstrip("-").isdigit():
-                logits[token_id] = float("-inf")
-                
-            # If it's not a delimiter, it must be part of a valid integer
-            candidate = number_str + token_str
-            is_valid_int_prefix = candidate == "-" or candidate.lstrip("-").isdigit()
-            if (
-                token_str != ","
-                and token_str != "}"
-                and not is_valid_int_prefix
-            ):
-                logits[token_id] = float("-inf")
+        for token_id in list(int_token_ids | delimiter_token_ids):
+            token_str = _token_str(model, token_id)
+            if token_str not in (",", "}"):
+                candidate = number_str + token_str
+                is_valid_int_prefix = candidate == "-" or candidate.lstrip("-").isdigit()
+                if not is_valid_int_prefix:
+                    logits[token_id] = float("-inf")
+            else:
+                if not number_str.lstrip("-").isdigit():
+                    logits[token_id] = float("-inf")
 
         next_token_id = model.next_token(logits)
-        next_token_str = model.decode([next_token_id])
+        next_token_str = _token_str(model, next_token_id)
 
         if next_token_str == "," or next_token_str == "}":
             break
 
+        generated_ids.append(next_token_id)
         number_str += next_token_str
-        result.parameters[param_name] = int(number_str)
-        live_update_function_call(live, result)
+        try:
+            result.parameters[param_name] = int(number_str)
+        except ValueError:
+            result.parameters[param_name] = None
+
+        if len(generated_ids) % 4 == 0:
+            live_update_function_call(live, result)
+
+    live_update_function_call(live, result)
 
 
 def decode_parameter_boolean(
@@ -239,31 +307,36 @@ def decode_parameter_boolean(
 ) -> None:
     """Generate a boolean parameter token-by-token with constraint checking.
 
-    Forces the model to output 'true' or 'false'.
-
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context seen so far.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
-        param_name: The name of the parameter being generated.
+    We build exact token sequences for "true" and "false" and use a
+    prefix->allowed-next-token-id map to deterministically constrain
+    generation to those two words.
     """
     output_str = ""
     parsed_bool = False
-    
-    while True:
-        logits = model.get_logits(model.encode(context + output_str))
+    context_ids = model.encode(context)
+    generated_ids: List[int] = []
 
-        for token_id, _ in enumerate(logits):
-            token_str = model.decode([token_id])
-            candidate = output_str + token_str
-            
-            if not any(target.startswith(candidate) for target in ("true", "false")):
-                logits[token_id] = float("-inf")
+    # Build token sequences for the two valid boolean words
+    targets = ["true", "false"]
+    target_seqs = [model.encode(t) for t in targets]
+    prefix_allowed: dict[tuple, set[int]] = {}
+    for seq in target_seqs:
+        for pos in range(len(seq)):
+            prefix = tuple(seq[:pos])
+            prefix_allowed.setdefault(prefix, set()).add(seq[pos])
+
+    while True:
+        logits = model.get_logits(context_ids + generated_ids)
+
+        allowed_next = prefix_allowed.get(tuple(generated_ids), set())
+        for token_id in range(len(logits)):
+            if token_id in allowed_next:
+                continue
+            logits[token_id] = float("-inf")
 
         next_token_id = model.next_token(logits)
-        next_token_str = model.decode([next_token_id])
-        
+        next_token_str = _token_str(model, next_token_id)
+
         full_candidate = (output_str + next_token_str).lower()
         if "true" in full_candidate:
             parsed_bool = True
@@ -271,9 +344,10 @@ def decode_parameter_boolean(
         if "false" in full_candidate:
             parsed_bool = False
             break
-            
+
+        generated_ids.append(next_token_id)
         output_str += next_token_str
-        
+
     result.parameters[param_name] = parsed_bool
     live_update_function_call(live, result)
 
@@ -289,13 +363,6 @@ def decode_function_arguments(
 
     Iterates through each parameter defined in the function signature and delegates
     to the specific type decoder.
-
-    Args:
-        model: The LLMWrapper instance.
-        context: The prompt context built up so far.
-        function_def: The schema definition of the function.
-        live: The rich Live display instance for UI updates.
-        result: The FunctionCallResult object being populated.
     """
     for param_name, param_type in function_def.parameters.items():
         context += f'"{param_name}": '
@@ -315,6 +382,4 @@ def decode_function_arguments(
                 context += f'{result.parameters[param_name]},'
             case "boolean":
                 decode_parameter_boolean(model, context, live, result, param_name)
-                # Boolean in json context usually doesn't have a trailing comma unless more elements
-                # The reference had logic here but basically we just append it
                 context += f'{str(result.parameters[param_name]).lower()},'

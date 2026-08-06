@@ -8,7 +8,7 @@ class CallMeMaybeError(Exception):
 
 
 class UnknownFunctionError(CallMeMaybeError):
-    """Raised when the model selects a function that is not in the registry."""
+    """Raised when the model selects an unknown function."""
 
 
 class DecodingError(CallMeMaybeError):

@@ -1,18 +1,27 @@
+"""Tests for the constrained decoder."""
+
 from __future__ import annotations
 
 import pytest
 
-from src.constrained_decoder import decode_parameter_float, decode_parameter_integer
+from src.constrained_decoder import (
+    decode_parameter_float,
+    decode_parameter_integer,
+)
 from src.errors import DecodingError
 from src.models import FunctionCallResult
 
 
 class DummyLive:
-    def update(self, *_args, **_kwargs) -> None:
+    """A no-op live display."""
+
+    def update(self, *_args: object, **_kwargs: object) -> None:
         pass
 
 
 class FakeModel:
+    """A fake model with a small token vocabulary."""
+
     def __init__(self) -> None:
         self._tokens = {
             0: "<pad>",
@@ -33,14 +42,15 @@ class FakeModel:
         return "".join(self._tokens[i] for i in ids)
 
     def prefill_logits(
-         self, _input_ids: list[int]) -> tuple[list[float], object]:
+        self, _input_ids: list[int]
+    ) -> tuple[list[float], object]:
         logits = [0.0] * len(self._tokens)
         logits[1] = 10.0
         return logits, object()
 
     def advance_logits(
-         self, _token_id: int, _past_key_values: object) -> tuple[
-         list[float], object]:
+        self, _token_id: int, _past_key_values: object
+    ) -> tuple[list[float], object]:
         logits = [0.0] * len(self._tokens)
         logits[1] = 10.0
         return logits, object()
@@ -50,20 +60,22 @@ class FakeModel:
 
 
 class ImpossibleModel:
+    """A fake model that can never produce a valid token."""
+
     def encode(self, _text: str) -> list[int]:
         return []
 
     def decode(self, ids: list[int]) -> str:
-        if not ids:
-            return ""
-        return "x"
+        return "" if not ids else "x"
 
-    def prefill_logits(self, _input_ids: list[int]) -> tuple[
-         list[float], object]:
+    def prefill_logits(
+        self, _input_ids: list[int]
+    ) -> tuple[list[float], object]:
         return [10.0], object()
 
     def advance_logits(
-         self, _token_id: int, _past_key_values: object) -> tuple[list[float], object]:
+        self, _token_id: int, _past_key_values: object
+    ) -> tuple[list[float], object]:
         return [10.0], object()
 
     def next_token(self, logits: list[float]) -> int:
@@ -71,13 +83,16 @@ class ImpossibleModel:
 
 
 def test_decode_parameter_float_stops_after_budget() -> None:
+    """Float decoding stops after the token budget."""
     model = FakeModel()
-    result = FunctionCallResult(prompt="test", name="fn_get_square_root", parameters={})
+    result = FunctionCallResult(
+        prompt="test", name="fn_get_square_root", parameters={}
+    )
 
     decode_parameter_float(
-        model,
+        model,  # type: ignore[arg-type]
         context="",
-        live=DummyLive(),
+        live=DummyLive(),  # type: ignore[arg-type]
         result=result,
         param_name="a",
         max_generated_tokens=3,
@@ -87,13 +102,16 @@ def test_decode_parameter_float_stops_after_budget() -> None:
 
 
 def test_decode_parameter_integer_stops_after_budget() -> None:
+    """Integer decoding stops after the token budget."""
     model = FakeModel()
-    result = FunctionCallResult(prompt="test", name="fn_add_numbers", parameters={})
+    result = FunctionCallResult(
+        prompt="test", name="fn_add_numbers", parameters={}
+    )
 
     decode_parameter_integer(
-        model,
+        model,  # type: ignore[arg-type]
         context="",
-        live=DummyLive(),
+        live=DummyLive(),  # type: ignore[arg-type]
         result=result,
         param_name="a",
         max_generated_tokens=2,
@@ -103,14 +121,17 @@ def test_decode_parameter_integer_stops_after_budget() -> None:
 
 
 def test_decode_parameter_float_raises_when_no_tokens_are_valid() -> None:
+    """Float decoding raises when no token is valid."""
     model = ImpossibleModel()
-    result = FunctionCallResult(prompt="test", name="fn_get_square_root", parameters={})
+    result = FunctionCallResult(
+        prompt="test", name="fn_get_square_root", parameters={}
+    )
 
-    with pytest.raises(DecodingError, match="Unable to decode float parameter"):
+    with pytest.raises(DecodingError, match="Unable to decode float"):
         decode_parameter_float(
-            model,
+            model,  # type: ignore[arg-type]
             context="",
-            live=DummyLive(),
+            live=DummyLive(),  # type: ignore[arg-type]
             result=result,
             param_name="a",
         )

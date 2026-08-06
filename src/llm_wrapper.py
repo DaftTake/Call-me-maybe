@@ -1,74 +1,54 @@
-"""Wrapper for the Small LLM Model from the llm_sdk.
+"""Typed wrapper around the llm_sdk Small_LLM_Model."""
 
-This module provides a convenient, typed abstraction over the raw SDK,
-handling tensor flattening and device details transparently.
-"""
+from __future__ import annotations
 
 from typing import Any, List, Tuple
+
+from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 from pydantic import BaseModel, PrivateAttr
-from llm_sdk import Small_LLM_Model
 
 
 class LLMWrapper(BaseModel):
-    """A convenient wrapper around the llm_sdk Small_LLM_Model."""
+    """Wrapper around the llm_sdk Small_LLM_Model."""
 
     model_name: str
     _model: Any = PrivateAttr()
 
     def model_post_init(self, __context: Any) -> None:
-        """Initialize the underlying SDK model after Pydantic validation."""
+        """Initialize the underlying SDK model."""
         self._model = Small_LLM_Model(self.model_name)
 
     def encode(self, text: str) -> List[int]:
-        """Encode text into a flat list of token IDs.
-
-        Args:
-            text: The string to tokenize.
-
-        Returns:
-            A list of token IDs.
-        """
-        # The SDK returns a 2D tensor, we flatten it for ease of use.
-        tensor = self._model.encode(text)
-        return tensor[0].tolist()
+        """Encode text into a flat list of token IDs."""
+        encoded = self._model.encode(text)[0].tolist()
+        return encoded  # type: ignore[no-any-return]
 
     def decode(self, token_ids: List[int]) -> str:
-        """Decode a list of token IDs back into text.
-
-        Args:
-            token_ids: The token IDs to decode.
-
-        Returns:
-            The decoded string.
-        """
-        return self._model.decode(token_ids)
+        """Decode token IDs back into text."""
+        decoded = self._model.decode(token_ids)
+        return decoded  # type: ignore[no-any-return]
 
     def get_logits(self, input_ids: List[int]) -> List[float]:
-        """Get the raw logits for the next token given a sequence of IDs.
+        """Return raw logits for the next token."""
+        logits = self._model.get_logits_from_input_ids(input_ids)
+        return logits  # type: ignore[no-any-return]
 
-        Args:
-            input_ids: The context sequence.
+    def prefill_logits(
+        self, input_ids: List[int]
+    ) -> Tuple[List[float], Any]:
+        """Run a prefix and return logits plus cache state."""
+        result = self._model.prefill_logits(input_ids)
+        return result  # type: ignore[no-any-return]
 
-        Returns:
-            A list of floats representing the logits for each vocabulary token.
-        """
-        return self._model.get_logits_from_input_ids(input_ids)
-
-    def prefill_logits(self, input_ids: List[int]) -> Tuple[List[float], Any]:
-        """Run a prefix once and return logits plus cache state."""
-        return self._model.prefill_logits(input_ids)
-
-    def advance_logits(self, token_id: int, past_key_values: Any) -> Tuple[List[float], Any]:
+    def advance_logits(
+        self, token_id: int, past_key_values: Any
+    ) -> Tuple[List[float], Any]:
         """Advance cached decoding by one token."""
-        return self._model.advance_logits(token_id, past_key_values)
+        result = self._model.advance_logits(
+            token_id, past_key_values
+        )
+        return result  # type: ignore[no-any-return]
 
     def next_token(self, logits: List[float]) -> int:
-        """Find the token ID with the highest logit score.
-
-        Args:
-            logits: The list of token logits.
-
-        Returns:
-            The index (token ID) of the maximum logit.
-        """
+        """Return the token ID with the highest logit."""
         return max(enumerate(logits), key=lambda x: x[1])[0]

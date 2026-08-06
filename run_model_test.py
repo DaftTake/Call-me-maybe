@@ -1,6 +1,11 @@
-import traceback
+"""Quick smoke test for the llm_sdk model."""
+
+from __future__ import annotations
+
 import sys
-from llm_sdk import Small_LLM_Model
+import traceback
+
+from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
 
 MODEL = "Qwen/Qwen3-0.6B"
 
@@ -8,11 +13,10 @@ try:
     print(f"Initializing model: {MODEL}")
     m = Small_LLM_Model(MODEL)
     print("Model initialized successfully.")
-    # Try a small encode/decode to exercise tokenizer
     ids = m.encode("hello world")
-    print("Encoded length:", ids.shape if hasattr(ids, 'shape') else len(ids))
-    print("Decode test:", m.decode(ids[0] if hasattr(ids, 'shape') else ids))
-except Exception as e:
+    print("Encoded length:", ids.shape if hasattr(ids, "shape") else len(ids))
+    print("Decode test:", m.decode(ids[0] if hasattr(ids, "shape") else ids))
+except Exception:
     print("Exception during model init:")
     traceback.print_exc()
     sys.exit(2)

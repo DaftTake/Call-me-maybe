@@ -1,19 +1,18 @@
-"""Terminal UI components for displaying progress and results.
+"""Terminal UI components."""
 
-Provides rich console output for displaying function registries, prompts,
-live function call generation, execution summaries, and error messages.
-"""
+from __future__ import annotations
 
+import json
+import sys
 from typing import List
+
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
-from rich.live import Live
 from rich.text import Text
-import json
 
-from src.models import FunctionRegistry, FunctionCallResult
-import sys
+from src.models import FunctionCallResult, FunctionRegistry
 
 console = Console()
 log = console.log
@@ -46,21 +45,23 @@ def print_header() -> None:
 
 
 def show_registry(registry: FunctionRegistry) -> None:
-    """Display the loaded function registry in a nice table."""
+    """Display the loaded function registry in a table."""
     table = Table(
         title="Loaded Function Registry",
         show_header=True,
         header_style="bold magenta",
-        expand=True
+        expand=True,
     )
     table.add_column("Function Name", style="cyan", width=20)
     table.add_column("Description", style="white")
     table.add_column("Parameters", style="green")
 
     for func in registry.functions:
-        params_str = ", ".join(f"{
-            name}: {param.type}" for name, param in func.parameters.items())
-        table.add_row(func.name, func.description, params_str or "None")
+        params = ", ".join(
+            f"{name}: {param.type}"
+            for name, param in func.parameters.items()
+        )
+        table.add_row(func.name, func.description, params or "None")
 
     console.print(table)
     console.print()
@@ -74,9 +75,10 @@ def show_prompts(prompts: List[str]) -> None:
     console.print()
 
 
-def live_update_function_call(live: Live, result: FunctionCallResult) -> None:
-    """Update the live UI display with the current state of generation."""
-    # Convert parameters to formatted JSON string
+def live_update_function_call(
+    live: Live, result: FunctionCallResult
+) -> None:
+    """Update the live UI with the current generation state."""
     try:
         params_json = json.dumps(result.parameters, indent=2)
     except Exception:
@@ -85,10 +87,8 @@ def live_update_function_call(live: Live, result: FunctionCallResult) -> None:
     content = Text()
     content.append("Prompt: ", style="bold cyan")
     content.append(f"{result.prompt}\n\n", style="white")
-
     content.append("Generating Function: ", style="bold magenta")
     content.append(f"{result.name}\n\n", style="green")
-
     content.append("Generating Parameters:\n", style="bold magenta")
     content.append(f"{params_json}", style="yellow")
 
@@ -104,6 +104,7 @@ def show_summary(total_time: float, num_prompts: int) -> None:
     """Display the execution summary."""
     console.print("\n[bold green]Generation Complete[/bold green]")
     console.print(
-         f"Procesed [cyan]{
-            num_prompts}[/cyan] prompts in [yellow]{
-                total_time:.2f}s[/yellow].")
+        "Procesed "
+        f"[cyan]{num_prompts}[/cyan] prompts in "
+        f"[yellow]{total_time:.2f}s[/yellow]."
+    )

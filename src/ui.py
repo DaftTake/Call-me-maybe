@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import List
+from typing import Any, List
 
 from rich.console import Console
 from rich.live import Live
@@ -108,3 +108,22 @@ def show_summary(total_time: float, num_prompts: int) -> None:
         f"[cyan]{num_prompts}[/cyan] prompts in "
         f"[yellow]{total_time:.2f}s[/yellow]."
     )
+
+
+def show_progress_bar(done: int, total: int, width: int = 30) -> None:
+    """Print a simple ASCII progress bar (visualization bonus)."""
+    filled = int(width * done / total) if total else 0
+    bar = "#" * filled + "-" * (width - filled)
+    console.print(f"[cyan]Progress:[/] [{bar}] {done}/{total}")
+
+
+def show_token_breakdown(text: str, token_ids: List[int],
+                         tokenizer: Any) -> None:
+    """Show how a string maps to tokens (tokenizer integration bonus)."""
+    table = Table(title="Token Breakdown", show_header=True)
+    table.add_column("Token ID", style="cyan")
+    table.add_column("Token", style="green")
+    for tid in token_ids:
+        table.add_row(str(tid), tokenizer.decode([tid]))
+    console.print(table)
+    console.print(f"Input: [yellow]{text}[/yellow]")

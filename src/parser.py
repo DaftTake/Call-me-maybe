@@ -1,16 +1,4 @@
-"""Command-line parsing and input file validation for the callme project.
-
-This module is responsible for:
-- Parsing CLI arguments (--functions_definition, --input, --output, ...).
-- Loading and validating the function definitions and prompt files.
-- Performing extra semantic checks (identifiers, duplicates, emptiness).
-- Ensuring the output path is writable.
-- Returning a validated tuple consumed by the rest of the program.
-
-Any validation failure raises ``ValueError`` with a helpful message.
-File/OS errors bubble up to :func:`parse`, which catches them and
-delegates to :func:`src.ui.print_error` (which prints and exits).
-"""
+"""CLI parsing and input validation."""
 
 from __future__ import annotations
 
@@ -32,153 +20,90 @@ DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 
 
 def _get_args() -> Dict[str, Any]:
-    """Parse command-line arguments and return them as a dictionary.
-
-    Returns:
-        A dict with keys: functions_definition, input, output, model, debug.
-    """
+    """Parse command-line arguments into a dict."""
     parser = ArgumentParser(
         prog="python -m src",
-        description=(
-            "Translate natural-language prompts into structured function "
-            "calls using constrained decoding."
-        ),
+        description="Translate natural-language prompts into "
+        "structured function calls.",
     )
     parser.add_argument(
         "--functions_definition",
         default=DEFAULT_FUNCTIONS_DEFINITION,
-        help=(
-            "Path to the JSON file describing the available functions "
-            f"(default: {DEFAULT_FUNCTIONS_DEFINITION})."
-        ),
+        help=f"Functions file (default: {DEFAULT_FUNCTIONS_DEFINITION}).",
     )
     parser.add_argument(
         "--input",
         default=DEFAULT_INPUT,
-        help=(
-            "Path to the JSON file containing the prompts to process "
-            f"(default: {DEFAULT_INPUT})."
-        ),
+        help=f"Prompts file (default: {DEFAULT_INPUT}).",
     )
     parser.add_argument(
         "--output",
         default=DEFAULT_OUTPUT,
-        help=(
-            "Path where the results JSON file will be written "
-            f"(default: {DEFAULT_OUTPUT})."
-        ),
+        help=f"Output file (default: {DEFAULT_OUTPUT}).",
     )
     parser.add_argument(
         "--model",
         default=DEFAULT_MODEL,
-        help=f"Name of the LLM model to use (default: {DEFAULT_MODEL}).",
+        help=f"Model name (default: {DEFAULT_MODEL}).",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Enable debug output during generation.",
+        help="Enable debug output.",
     )
     args: Namespace = parser.parse_args()
     return vars(args)
 
 
 def _load_json(path: str) -> Any:
-    """Load and parse a JSON file.
-
-    Args:
-        path: Path to the JSON file.
-
-    Returns:
-        The parsed JSON content.
-
-    Raises:
-        ValueError: If the file contains invalid JSON, with the file path,
-            line, and column of the error.
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as file:
+    """Load a JSON file, raising ValueError with location on bad JSON."""
+    with open(path, "r", encoding="utf-8") as file:
+        try:
             return json.load(file)
-    except json.JSONDecodeError as error:
-        raise ValueError(
-            f"Invalid json file: '{path}:{error.lineno}:{error.colno}'"
-            f" - {error.msg}"
-        ) from error
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"Invalid json file: '{path}:{error.lineno}:{error.colno}'"
+                f" - {error.msg}"
+            ) from error
+
+
+def _validation_message(path: str, error: ValidationError,
+                        prefix: str) -> str:
+    """Build a short validation error message."""
+    first_error = error.errors(include_url=False)[0]
+    message = first_error.get("msg", "malformed input")
+    location = first_error.get("loc", ())
+    field = location[-1] if location else None
+    if field:
+        return f"Invalid {prefix} file: '{path}' - '{field}' - {message}"
+    return f"Invalid {prefix} file: '{path}' - {message}"
 
 
 def _load_function_registry(path: str) -> FunctionRegistry:
-    """Load and validate the function definitions file.
-
-    Args:
-        path: Path to the functions_definition JSON file.
-
-    Returns:
-        A validated :class:`FunctionRegistry`.
-
-    Raises:
-        ValueError: If the file is invalid JSON or fails pydantic validation.
-    """
+    """Load and validate the function definitions file."""
     json_data = _load_json(path)
     try:
-        function_registry: FunctionRegistry = FunctionRegistry.model_validate(
-            {"functions": json_data}
-        )
+        return FunctionRegistry.model_validate({"functions": json_data})
     except ValidationError as error:
-        first_error = error.errors(include_url=False)[0]
-        message = first_error.get("msg", "malformed input")
-        location = first_error.get("loc", ())
-        if location:
-            raise ValueError(
-                f"Invalid config file: '{path}' - '{location[-1]}' - "
-                f"{message}"
-            ) from error
         raise ValueError(
-            f"Invalid config file: '{path}' - {message}"
+            _validation_message(path, error, "config")
         ) from error
-    return function_registry
 
 
 def _load_prompts(path: str) -> List[Prompt]:
-    """Load and validate the prompts file.
-
-    Args:
-        path: Path to the function_calling_tests JSON file.
-
-    Returns:
-        A list of validated :class:`Prompt` objects.
-
-    Raises:
-        ValueError: If the file is invalid or fails pydantic validation.
-    """
+    """Load and validate the prompts file."""
     json_file = _load_json(path)
     try:
-        prompts: List[Prompt] = [Prompt(**item) for item in json_file]
+        return [Prompt(**item) for item in json_file]
     except ValidationError as error:
-        first_error = error.errors(include_url=False)[0]
-        message = first_error.get("msg", "malformed input")
-        location = first_error.get("loc", ())
-        if location:
-            raise ValueError(
-                f"Invalid input file: '{path}' - '{location[-1]}' - "
-                f"{message}"
-            ) from error
         raise ValueError(
-            f"Invalid input file: '{path}' - {message}"
+            _validation_message(path, error, "input")
         ) from error
-    return prompts
 
 
-def _validate_registry(
-    function_registry: FunctionRegistry, path: str
-) -> None:
-    """Perform semantic checks on the function registry.
-
-    Args:
-        function_registry: The registry to validate.
-        path: The source file path, used in error messages.
-
-    Raises:
-        ValueError: If any semantic check fails.
-    """
+def _validate_registry(function_registry: FunctionRegistry,
+                       path: str) -> None:
+    """Reject empty, invalid, keyword, or duplicate function names."""
     if not function_registry.functions:
         raise ValueError(
             f"Invalid config file: '{path}' - No functions provided"
@@ -206,15 +131,7 @@ def _validate_registry(
 
 
 def _validate_prompts(prompts: List[Prompt], path: str) -> None:
-    """Perform semantic checks on the prompts list.
-
-    Args:
-        prompts: The list of prompts to validate.
-        path: The source file path, used in error messages.
-
-    Raises:
-        ValueError: If any semantic check fails.
-    """
+    """Reject an empty prompt list or empty prompt strings."""
     if not prompts:
         raise ValueError(
             f"Invalid input file: '{path}' - No prompts provided"
@@ -227,14 +144,7 @@ def _validate_prompts(prompts: List[Prompt], path: str) -> None:
 
 
 def parse() -> Tuple[FunctionRegistry, List[Prompt], Path, str, bool]:
-    """Parse arguments, load and validate all input files.
-
-    Returns:
-        A tuple ``(function_registry, prompts, output_path, model, debug)``.
-
-    Raises:
-        SystemExit: Via :func:`src.ui.print_error` when any error occurs.
-    """
+    """Parse args, validate inputs, ensure writable output, return config."""
     args = _get_args()
     try:
         function_registry = _load_function_registry(
@@ -249,8 +159,7 @@ def parse() -> Tuple[FunctionRegistry, List[Prompt], Path, str, bool]:
 
         output_path = Path(args["output"])
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w", encoding="utf-8") as file:
-            file.write("")
+        open(output_path, "w", encoding="utf-8").close()
 
         model = str(args["model"])
         debug = bool(args["debug"])
@@ -269,5 +178,4 @@ def parse() -> Tuple[FunctionRegistry, List[Prompt], Path, str, bool]:
         print_error(f"OS error: '{error}'")
     except ValueError as error:
         print_error(str(error))
-    # Unreachable in practice: print_error always exits.
     raise RuntimeError("Unreachable code reached in parse()")

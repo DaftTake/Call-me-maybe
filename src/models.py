@@ -1,8 +1,4 @@
-"""Pydantic models for the callme project.
-
-These models validate the input files (function definitions and prompts)
-and the output results, ensuring type safety and schema compliance.
-"""
+"""Pydantic models for the callme project."""
 
 from __future__ import annotations
 
@@ -12,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 
 class ParameterType(BaseModel):
-    """A single parameter definition inside a function."""
+    """A single parameter definition."""
 
     type: str = Field(..., description="The JSON type of the parameter")
 
@@ -90,5 +86,5 @@ class FunctionCallResults(BaseModel):
     results: List[FunctionCallResult] = Field(default_factory=list)
 
     def dump(self) -> str:
-        """Dump the results to a JSON string in the exact format required."""
+        """Dump the results to a JSON string."""
         return self.model_dump_json(indent=4)

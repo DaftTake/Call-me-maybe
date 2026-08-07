@@ -52,3 +52,13 @@ class LLMWrapper(BaseModel):
     def next_token(self, logits: List[float]) -> int:
         """Return the token ID with the highest logit."""
         return max(enumerate(logits), key=lambda x: x[1])[0]
+
+    def get_vocab_path(self) -> str:
+        """Return the path to the model's vocab.json file."""
+        path = self._model.get_path_to_vocab_file()
+        return path  # type: ignore[no-any-return]
+
+    def get_merges_path(self) -> str:
+        """Return the path to the model's merges.txt file."""
+        path = self._model.get_path_to_merges_file()
+        return path  # type: ignore[no-any-return]

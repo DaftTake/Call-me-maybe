@@ -1,21 +1,18 @@
 """Typed wrapper around the llm_sdk Small_LLM_Model."""
 
-from __future__ import annotations
+
 
 from typing import Any, List, Tuple
 
 from llm_sdk import Small_LLM_Model  # type: ignore[attr-defined]
-from pydantic import BaseModel, PrivateAttr
 
 
-class LLMWrapper(BaseModel):
+class LLMWrapper:
     """Wrapper around the llm_sdk Small_LLM_Model."""
 
-    model_name: str
-    _model: Any = PrivateAttr()
-
-    def model_post_init(self, __context: Any) -> None:
+    def __init__(self, model_name: str) -> None:
         """Initialize the underlying SDK model."""
+        self.model_name = model_name
         self._model = Small_LLM_Model(self.model_name)
 
     def encode(self, text: str) -> List[int]:

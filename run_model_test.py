@@ -1,6 +1,6 @@
 """Quick smoke test for the llm_sdk model."""
 
-from __future__ import annotations
+
 
 import sys
 import traceback

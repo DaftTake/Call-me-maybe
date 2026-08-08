@@ -1,6 +1,6 @@
 """Tests for error handling in the main entry point."""
 
-from __future__ import annotations
+
 
 from pathlib import Path
 from typing import Any, Tuple

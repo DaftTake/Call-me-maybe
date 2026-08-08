@@ -1,6 +1,6 @@
 """Tests for the recoded tokenizer bonus."""
 
-from __future__ import annotations
+
 
 import json
 from pathlib import Path

@@ -1,9 +1,10 @@
 """Entry point for the callme program."""
 
-from __future__ import annotations
+
 
 import sys
 import time
+from typing import Callable
 
 from pydantic import ValidationError
 from rich.live import Live
@@ -52,7 +53,7 @@ def main() -> None:
 
     print("\033[2J\033[H\033[3J", end="")
     print_header()
-    logger = console.log if debug else _noop
+    logger: Callable[..., None] = console.log if debug else _noop
 
     show_registry(function_registry)
     show_prompts([p.prompt for p in prompts])

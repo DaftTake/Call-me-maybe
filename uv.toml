@@ -1,3 +1,3 @@
 # Project-level uv configuration.
 # Ensures uv uses a writable cache location regardless of shell environment.
-cache-dir = "/goinfre/wabbad/uv/cache"
+# cache-dir = "/goinfre/wabbad/uv/cache"

@@ -5,7 +5,7 @@ used by Qwen models. It reads the model's vocab.json and merges.txt
 files and provides encode(text) and decode(token_ids) methods.
 """
 
-from __future__ import annotations
+
 
 import json
 import re
@@ -29,7 +29,7 @@ def _bytes_to_unicode() -> Dict[int, str]:
     return dict(zip(bs, [chr(c) for c in cs]))
 
 
-def _get_pairs(word: Tuple[str, ...]) -> set:
+def _get_pairs(word: Tuple[str, ...]) -> set[Tuple[str, str]]:
     """Return all adjacent bigrams of a token word."""
     return {
         (word[i], word[i + 1]) for i in range(len(word) - 1)

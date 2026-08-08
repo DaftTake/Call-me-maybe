@@ -1,6 +1,6 @@
 """Custom exceptions for the callme project."""
 
-from __future__ import annotations
+
 
 
 class CallMeMaybeError(Exception):

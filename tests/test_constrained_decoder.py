@@ -1,6 +1,6 @@
 """Tests for the constrained decoder."""
 
-from __future__ import annotations
+
 
 import pytest
 

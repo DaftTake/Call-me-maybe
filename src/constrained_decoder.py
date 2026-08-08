@@ -1,6 +1,6 @@
 """Constrained decoding engine for function calls."""
 
-from __future__ import annotations
+
 
 import math
 from typing import Any, List
@@ -46,7 +46,7 @@ def decode_function_name(
     generated_ids: List[int] = []
     found_match = False
 
-    prefix_allowed: dict[tuple, set[int]] = {}
+    prefix_allowed: dict[tuple[int, ...], set[int]] = {}
     for seq in (model.encode(n) for n in valid_names):
         for pos in range(len(seq)):
             prefix_allowed.setdefault(tuple(seq[:pos]), set()).add(seq[pos])
@@ -282,7 +282,7 @@ def decode_parameter_boolean(
     logits, past_key_values = _prefill(model, context)
     generated_ids: List[int] = []
 
-    prefix_allowed: dict[tuple, set[int]] = {}
+    prefix_allowed: dict[tuple[int, ...], set[int]] = {}
     for seq in (model.encode(t) for t in ("true", "false")):
         for pos in range(len(seq)):
             prefix_allowed.setdefault(tuple(seq[:pos]), set()).add(seq[pos])

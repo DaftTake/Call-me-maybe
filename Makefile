@@ -29,7 +29,7 @@ debug:
 
 # Remove temporary files or caches to keep the project environment clean.
 clean:
-	rm -rf __pycache__ .mypy_cache .pytest_cache
+	rm -rf __pycache__ .mypy_cache .pytest_cache data/output
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 
 # Run the linters (flake8 and mypy) with the mandatory flags.

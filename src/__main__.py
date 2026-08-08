@@ -17,7 +17,6 @@ from src.errors import CallMeMaybeError, DecodingError, UnknownFunctionError
 from src.llm_wrapper import LLMWrapper
 from src.models import FunctionCallResult, FunctionCallResults
 from src.parser import parse
-from src.tokenizer import RecodedTokenizer
 from src.ui import (
     console,
     print_header,
@@ -25,7 +24,6 @@ from src.ui import (
     show_progress_bar,
     show_registry,
     show_summary,
-    show_token_breakdown,
 )
 
 MAX_RETRIES = 3
@@ -128,15 +126,6 @@ def main() -> None:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(results.dump())
             show_progress_bar(idx, total)
-
-        if debug and pending:
-            tokenizer = RecodedTokenizer(
-                model.get_vocab_path(), model.get_merges_path()
-            )
-            sample = pending[0].prompt
-            show_token_breakdown(
-                sample, tokenizer.encode(sample), tokenizer
-            )
 
         total_time = time.perf_counter() - start_time
         show_summary(total_time, len(prompts))

@@ -27,7 +27,7 @@ def print_error(msg: str) -> None:
 def print_header() -> None:
     """Print the application title banner."""
     title = Text(
-        "\n☎ Call Me Maybe (Constrained Decoding Engine) ☎\n",
+        "\nCall Me Maybe (Constrained Decoding Engine)\n",
         justify="center",
         style="bold bright_cyan",
     )
@@ -53,7 +53,6 @@ def show_registry(registry: FunctionRegistry) -> None:
         expand=True,
     )
     table.add_column("Function Name", style="cyan", width=20)
-    table.add_column("Description", style="white")
     table.add_column("Parameters", style="green")
 
     for func in registry.functions:
@@ -61,7 +60,7 @@ def show_registry(registry: FunctionRegistry) -> None:
             f"{name}: {param.type}"
             for name, param in func.parameters.items()
         )
-        table.add_row(func.name, func.description, params or "None")
+        table.add_row(func.name, params or "None")
 
     console.print(table)
     console.print()
@@ -117,13 +116,4 @@ def show_progress_bar(done: int, total: int, width: int = 30) -> None:
     console.print(f"[cyan]Progress:[/] [{bar}] {done}/{total}")
 
 
-def show_token_breakdown(text: str, token_ids: List[int],
-                         tokenizer: Any) -> None:
-    """Show how a string maps to tokens (tokenizer integration bonus)."""
-    table = Table(title="Token Breakdown", show_header=True)
-    table.add_column("Token ID", style="cyan")
-    table.add_column("Token", style="green")
-    for tid in token_ids:
-        table.add_row(str(tid), tokenizer.decode([tid]))
-    console.print(table)
-    console.print(f"Input: [yellow]{text}[/yellow]")
+

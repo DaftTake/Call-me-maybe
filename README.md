@@ -20,6 +20,12 @@ Small models are unreliable at producing valid JSON on their own (~30% success).
 Constrained decoding masks illegal tokens at every generation step, guaranteeing
 **100% valid, schema-compliant JSON**.
 
+## Demo
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Terminal Generation Demo" width="800"/>
+</p>
+
 ## Instructions
 
 ### Prerequisites
@@ -92,8 +98,7 @@ The decoder enforces:
 
 ## Testing strategy
 
-`pytest` covers models, parser validation, constrained decoding (float/integer),
-error handling, and the recoded tokenizer.
+`pytest` covers data models, parser validation, constrained decoding (float/integer), and error handling.
 
 ## Example usage
 
@@ -104,14 +109,10 @@ uv run python -m src --model Qwen/Qwen3-0.6B --debug
 
 ## Bonus features
 
-- **Recoded tokenizer** (`src/tokenizer.py`): a public byte-level BPE tokenizer
-  built from `vocab.json`/`merges.txt`, independent of the SDK's `encode`/`decode`.
-- **Tokenizer integration**: `--debug` shows a token breakdown of a sample prompt
-  using the recoded tokenizer.
 - **Multi-model support**: `--model` accepts any HF causal LM.
 - **Error recovery**: decoding failures retry up to 3 times before giving up.
 - **Result caching**: re-runs skip prompts already present in the output file.
-- **Visualization**: ASCII progress bar during generation.
+- **Live Terminal UI & Visualization**: interactive panel and progress bar during generation.
 
 ## Resources
 
